@@ -1,3 +1,6 @@
+const ADAPTER_URL: &str = "https://github.com/bytecodealliance/wasmtime/releases\
+                           /download/v17.0.1/wasi_snapshot_preview1.reactor.wasm";
+
 #[cfg(test)]
 mod wasm_test {
     use wasmtime::component::Component;
@@ -25,6 +28,10 @@ mod wasm_test {
 
         let component = ComponentEncoder::default()
             .module(GUEST_RS_WASM_MODULE)?
+            .adapter(
+                "wasi_snapshot_preview1",
+                &reqwest::blocking::get(super::ADAPTER_URL)?.bytes()?,
+            )?
             .validate(true)
             .encode()?;
         let component = Component::from_binary(&engine, &component)?;
@@ -144,34 +151,46 @@ mod wasm_wasi_test {
     #[test]
     fn test_rs_guest() -> anyhow::Result<()> {
         let mut config = Config::new();
-        config.async_support(true);
         let engine = Engine::new(&config)?;
         let host = Host::new();
         let mut store = Store::new(&engine, host);
         let mut linker = Linker::new(&engine);
-        wasmtime_wasi::preview2::command::add_to_linker::<Host>(&mut linker)?;
+        wasmtime_wasi::preview2::command::sync::add_to_linker::<Host>(&mut linker)?;
 
         let component = ComponentEncoder::default()
             .module(GUEST_RS_WASI_MODULE)?
+            .adapter(
+                "wasi_snapshot_preview1",
+                &reqwest::blocking::get(super::ADAPTER_URL)?.bytes()?,
+            )?
             .validate(true)
             .encode()?;
         let component = Component::from_binary(&engine, &component)?;
         let instance = linker.instantiate(&mut store, &component)?;
-        let f1 = instance.get_typed_func::<(), (String,)>(&mut store, "hello")?;
-        let (output,) = f1.call(&mut store, ())?;
-        println!("Got output {}", output);
+        let mut exports = instance.exports(&mut store);
+        let mut intf = exports.instance("myintf").unwrap();
+        let f1 = intf.typed_func::<(String,), (Vec<String>,)>("extract-emails")?;
+        drop(exports);
+        let (emails1,) = f1.call(
+            &mut store,
+            ("Hello my name is John Doe, my email is john.doe@gmail.com
+              I also have another email: john.doe@icloud.com
+              My friend's email is jane.doe@hotmail.com"
+                .to_owned(),),
+        )?;
+        f1.post_return(&mut store)?;
+        println!("Got output {:?}", emails1);
         Ok(())
     }
 
     #[test]
     fn test_py_guest() -> anyhow::Result<()> {
         let mut config = Config::new();
-        // config.async_support(true);
         let engine = Engine::new(&config)?;
         let host = Host::new();
         let mut store = Store::new(&engine, host);
         let mut linker = Linker::new(&engine);
-        wasmtime_wasi::preview2::command::add_to_linker::<Host>(&mut linker)?;
+        wasmtime_wasi::preview2::command::sync::add_to_linker::<Host>(&mut linker)?;
 
         let component = Component::from_binary(&engine, &GUEST_PY_WASI_COMPONENT)?;
         let instance = linker.instantiate(&mut store, &component)?;
